@@ -1,6 +1,14 @@
 #include "BNO055.h"
 #include "mbed.h"
 
+// 通信完了フラグ
+volatile bool imu_i2c_busy = false;
+
+// 通信完了時に呼ばれるコールバック
+void on_i2c_complete(int event) {
+    imu_i2c_busy = false;
+}
+
 BNO055::BNO055(PinName SDA, PinName SCL) : _i2c(SDA,SCL){
     //Set I2C fast and bring reset line high
     _i2c.frequency(400000);
@@ -9,7 +17,8 @@ BNO055::BNO055(PinName SDA, PinName SCL) : _i2c(SDA,SCL){
     rate_scale = 1.0f/16.0f;
     angle_scale = 1.0f/16.0f;
     temp_scale = 1;
-    }
+    reset();
+}
     
 void BNO055::reset(){
 //Perform a power-on-reset
@@ -192,6 +201,32 @@ void BNO055::get_quat(void){
     quat.x = float(quat.rawx)/16384.0f;
     quat.y = float(quat.rawy)/16384.0f;
     quat.z = float(quat.rawz)/16384.0f;
+}
+
+void BNO055::get_quat_async(void) {
+    if (imu_i2c_busy) return; // 前の通信が終わっていなければスキップ
+
+    tx[0] = BNO055_QUATERNION_DATA_W_LSB_ADDR;
+    imu_i2c_busy = true;
+
+    // txを1バイト送信し、続いてrawdataを8バイト受信する
+    // コールバックを指定することで非同期モードになる
+    _i2c.transfer(address, (char*)tx, 1, (char*)rawdata, 8, 
+                callback(on_i2c_complete), I2C_EVENT_ALL);
+}
+
+// 通信が終わった後にデータを反映させるための関数
+void BNO055::update_quat_data(void) {
+    if (imu_i2c_busy) return; // 通信中はデータを更新しない
+
+    quat.raww = (rawdata[1] << 8 | rawdata[0]);
+    quat.rawx = (rawdata[3] << 8 | rawdata[2]);
+    quat.rawy = (rawdata[5] << 8 | rawdata[4]);
+    quat.rawz = (rawdata[7] << 8 | rawdata[6]);
+    quat.w = float(quat.raww) / 16384.0f;
+    quat.x = float(quat.rawx) / 16384.0f;
+    quat.y = float(quat.rawy) / 16384.0f;
+    quat.z = float(quat.rawz) / 16384.0f;
 }
 
 void BNO055::get_angles(void){
